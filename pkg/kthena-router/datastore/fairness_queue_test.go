@@ -935,16 +935,7 @@ func TestRun_SemaphoreMode_EmptyQueueDoesNotConsumePermit(t *testing.T) {
 	req.Release()
 }
 
-// TestPriorityRefresh_PreservesSameUserFIFO verifies the queue's documented
-// per-user ordering rule ("same user: requests remain FIFO by arrival time")
-// while dequeue-time priority refresh is enabled.
-//
-// The scenario mirrors a burst from user-a interleaved with a competing user-b:
-// user-a's usage grows between dequeues (its earlier requests report tokens as
-// they are served), so each refresh raises the stored priority of the request
-// under consideration. The refresh of a later request can then tie with the
-// refreshed priority of an earlier one; a strict ">" comparison lets the later
-// request through while the earlier one stays queued, breaking FIFO.
+// TestPriorityRefresh_PreservesSameUserFIFO verifies that same-user FIFO holds while dequeue-time priority refresh is enabled.
 func TestPriorityRefresh_PreservesSameUserFIFO(t *testing.T) {
 	tracker := newMockTokenTracker()
 	cfg := FairnessQueueConfig{
