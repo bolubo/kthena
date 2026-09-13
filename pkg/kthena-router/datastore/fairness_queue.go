@@ -375,6 +375,24 @@ func (pq *RequestPriorityQueue) popWhenAvailable(ctx context.Context) (*Request,
 		if len(pq.heap) > 0 {
 			req := heap.Pop(pq).(*Request)
 
+			// Same-user FIFO guard: priorities are per-request snapshots of a
+			// user's token usage, and dequeue-time refresh rewrites only the
+			// request under consideration, so requests of the same user can
+			// carry different snapshots. Same-user pairs compare by arrival while
+			// cross-user pairs compare by snapshot; that mixture can place a
+			// later request of a user above an earlier one. The heap selects
+			// which user to serve next; within a user the queue guarantees FIFO
+			// by arrival time, so serve the earliest request still queued for
+			// this user even when a later one reaches the root first.
+			if !pq.sessionBoost {
+				if idx := pq.earliestQueuedBeforeLocked(req.UserID, req.RequestTime); idx >= 0 {
+					earlier := pq.heap[idx]
+					heap.Remove(pq, idx)
+					heap.Push(pq, req)
+					req = earlier
+				}
+			}
+
 			// Skip cancelled/timed-out requests
 			if req.isCancelled() {
 				pq.metricDecSize(req.ModelName, req.UserID)
@@ -458,6 +476,22 @@ func (r *Request) isCancelled() bool {
 
 func (pq *RequestPriorityQueue) shouldRebuildLocked() bool {
 	return pq.config.RebuildThreshold <= 0 || len(pq.heap) <= pq.config.RebuildThreshold
+}
+
+// earliestQueuedBeforeLocked returns the index of the earliest request of the
+// given user that arrived before the given time and is still queued, or -1 when
+// there is none. Caller must hold pq.mu.
+func (pq *RequestPriorityQueue) earliestQueuedBeforeLocked(userID string, before time.Time) int {
+	idx := -1
+	for i, req := range pq.heap {
+		if req.UserID != userID || !req.RequestTime.Before(before) {
+			continue
+		}
+		if idx < 0 || req.RequestTime.Before(pq.heap[idx].RequestTime) {
+			idx = i
+		}
+	}
+	return idx
 }
 
 // rebuildHeap refreshes priorities for all queued items and rebuilds the heap.
