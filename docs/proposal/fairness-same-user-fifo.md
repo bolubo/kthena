@@ -3,11 +3,8 @@ title: "Same-User FIFO in the Fairness Queue: Violation, Root Cause, and Fix Opt
 authors:
 - "@bolubo"
 reviewers:
-- "@hzxuzhonghu"
-- "@YaoZengzeng"
 - TBD
 approvers:
-- "@hzxuzhonghu"
 - TBD
 
 creation-date: 2026-09-19
