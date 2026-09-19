@@ -1,5 +1,5 @@
 ---
-title: Same-User FIFO in the Fairness Queue: Violation, Root Cause, and Fix Options
+title: "Same-User FIFO in the Fairness Queue: Violation, Root Cause, and Fix Options"
 authors:
 - "@bolubo"
 reviewers:
