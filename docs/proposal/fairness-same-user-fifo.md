@@ -105,7 +105,7 @@ the test fails without the guard and passes with it.
 | Check | Result |
 |---|---|
 | Red case, refresh disabled (baseline) | 0 violations |
-| Red case on a cluster: refresh on (1 / 2 / rebuild disabled) | 26 / 31 / 50 violations |
+| Red case on a cluster: refresh on, 3 runs (last with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
 | Workload traces (real shapes): serial / mixed / all-agent | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated |
 | Amplification on a constructed workload: fixed scores / drift only / default | 0.04–0.06% → 25.2% → 19.7% (≈500×) |
