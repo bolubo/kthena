@@ -38,8 +38,7 @@ still queued.
 This proposal:
 
 1. documents the violation, its root cause, and the evidence;
-2. proposes the fix — enforce same-user FIFO at the dequeue decision point
-   ("the guard");
+2. proposes the fix: enforce same-user FIFO at dequeue time ("the guard");
 3. presents two ready implementations of the lookup the guard needs, with
    measured cost.
 
@@ -70,58 +69,57 @@ re-inserted and the next candidate is tried instead (bounded by the retry
 count, with an optional full heap rebuild when the queue is small enough,
 `FAIRNESS_REBUILD_THRESHOLD`, default 64).
 
-Same-user order is therefore not enforced anywhere — it is *hoped for*: it
-holds only as long as each user's requests keep their relative comparison
-outcomes while the queue is drained. The refresh path is exactly the mechanism
+Same-user order is therefore not enforced anywhere; it holds only as long as
+each user's requests keep their relative comparison outcomes while the queue
+is drained. The refresh path is exactly the mechanism
 that can change those outcomes mid-drain: it re-inserts a request whose stored
 score has moved, and the request that ends up at the root next is chosen by
 scores, not by "who is the earliest queued request of this user".
 
 #### Reproducible case
 
-Four requests are enough (arrival order and enqueue priorities below):
+With dequeue-time refresh enabled (`FAIRNESS_PRIORITY_REFRESH_RETRIES=2`; the
+guide recommends `1` or `2`), four requests are enough (arrival order and
+enqueue priorities below):
 
 - B1 (P=1), B2 (P=1), then A1 (P=0), A2 (P=0).
 
 ```mermaid
 flowchart TB
-    A["Arrival order: B1 (P=1), B2 (P=1), A1 (P=0), A2 (P=0) — lower P is served first"] --> B["1 · heap.Pop returns A1"]
+    A["Arrival order: B1 (P=1), B2 (P=1), A1 (P=0), A2 (P=0); lower P is served first"] --> B["1 · heap.Pop returns A1"]
     B --> C["2 · refresh recomputes A1's priority: 0 → 1"]
     C --> D["3 · A1 no longer ranks first (1 > A2's 0): A1 is re-inserted, the next candidate is tried"]
-    D --> E["4 · heap.Pop returns A2 — a later request of the same user"]
-    E --> F["released order: A2, B1, A1, B2 → one same-user FIFO violation"]
+    D --> E["4 · heap.Pop returns A2 (a later request of the same user)"]
+    E --> F["release order: A2, B1, A1, B2 → one same-user FIFO violation"]
 ```
 
-*Figure 1: the red case. A1 arrives first, A2 arrives later; A2 is released
+*Figure 1: the reproducer. A1 arrives first, A2 arrives later; A2 is released
 first. Cross-user positions are unaffected.*
 
 The case is deterministic. [#1772] adds
-`TestPriorityRefresh_PreservesSameUserFIFO`, which reproduces the violation in
-a burst shape (a user's burst is drained while its tracked usage grows) —
-the test fails without the guard and passes with it.
+`TestPriorityRefresh_PreservesSameUserFIFO`, which reproduces the violation
+during a burst (the user's burst is drained while its tracked usage grows).
+The test fails without the guard and passes with it.
 
 #### Evidence
 
 | Check | Result |
 |---|---|
-| Red case, refresh disabled (baseline) | 0 violations |
-| Red case on a cluster: refresh on, 3 runs (last with rebuild disabled) | 26 / 31 / 50 violations |
+| Reproducer, refresh disabled (baseline) | 0 violations |
+| Reproducer on a cluster: refresh on, 3 runs (last with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
-| Workload traces (real shapes): serial / mixed / all-agent | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated |
-| Amplification on a constructed workload: fixed scores / drift only / default | 0.04–0.06% → 25.2% → 19.7% (≈500×) |
-| After the fix: same cases + enumeration of 1.16M orderings with `-race` | 0 violations; 0 failures |
+| Workload profiles (serial / mixed / all-agent), live runs | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (results vary between runs) |
+| After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
 
 Notes on reading this table:
 
 - The violation is invisible from the outside: queue order is not exposed by
-  any metric or dashboard; users only see waiting time. The traces above
+  any metric or dashboard; users only see waiting time. The runs above
   measure it by reconstructing arrival order (log time minus waiting time) and
-  counting same-user inversions over 1 ms.
-- The amplification row is a **constructed** workload used to attribute the
-  effect (score drift while a user has a burst queued). It is not a production
-  incidence rate and should not be quoted as one.
+  counting same-user inversions over 1 ms. The full results are in [#1771];
+  the reproduction steps, audit script, and raw logs are linked from [#1772].
 - Environment: single router, same machine for before/after measurements;
-  numbers are indicative, not a benchmark suite.
+  numbers are for reference, not a benchmark suite.
 
 #### Why this matters
 
@@ -129,9 +127,9 @@ The user guide states the same-user order as an unconditional property of
 fairness scheduling. This is a contract violation, not a tuning preference:
 under the configuration the guide recommends, a client that issues requests in
 sequence (a credential can be an application or an agent, not just one person)
-can have them returned out of order. The failure is silent — nothing in the
-system reports it — which is what makes it worth fixing at the decision point
-rather than documenting around.
+can have them returned out of order. The failure is silent: nothing in the
+system reports it. That is why it is worth fixing at dequeue time, instead of
+documenting it as a caveat.
 
 #### Goals
 
@@ -145,17 +143,17 @@ rather than documenting around.
 
 #### Non-Goals
 
-1. Redesigning the queue (per-user sub-queues) — see [Future Work](#future-work).
+1. Redesigning the queue (per-user sub-queues); see [Future Work](#future-work).
 2. Changing the priority formula, the sliding window, or cross-user semantics.
 3. Changing refresh or rebuild behavior, defaults, or configuration surfaces.
 4. Fixing every possible ordering anomaly under staleness; this change targets
-   same-user ordering at the decision point.
+   same-user ordering at dequeue time.
 5. New CRDs, Helm values, metrics, or log surfaces.
 6. Changing session-boost mode, which does not use the fairness comparator.
 
 ### Proposal
 
-**Enforce same-user FIFO at the dequeue decision point.** Before a candidate
+**Enforce same-user FIFO at dequeue time.** Before a candidate
 request is released, check whether the same user has an earlier request still
 in the queue. If it does, serve that request instead, and keep the candidate
 queued. Nothing else changes: the comparator, the priority formula, the
@@ -173,7 +171,7 @@ flowchart LR
     end
 ```
 
-*Figure 2: the same red case, before and after. Only the same-user pair moves;
+*Figure 2: the same reproducer, before and after. Only the same-user pair moves;
 B1 stays 2nd and B2 stays 4th, so cross-user positions are unchanged.*
 
 #### Position in the dequeue path
@@ -185,9 +183,9 @@ cancelled/timed-out skip and before the refresh block
 
 ```mermaid
 flowchart TB
-    S1["1 · heap.Pop — the smallest key becomes the candidate"] --> S2["2 · guard (new) — if the candidate's user has an earlier queued request, serve that one instead"]
+    S1["1 · heap.Pop: the smallest key becomes the candidate"] --> S2["2 · guard (new): if the candidate's user has an earlier queued request, serve that one instead"]
     S2 --> S3["3 · skip cancelled / timed-out"]
-    S3 --> S4["4 · priority refresh — re-evaluate, re-insert and retry while retries remain"]
+    S3 --> S4["4 · priority refresh: re-evaluate, re-insert and retry while retries remain"]
     S4 --> S5["5 · accounting"]
     S5 --> S6["6 · release"]
 ```
@@ -202,20 +200,22 @@ The guard needs to answer one question: *which request is this user's earliest
 still-queued one, and where is it in the heap?* There are three ways to answer
 it; we implemented and measured all three, and recommend Option A.
 
-| Lookup variant | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
+| Lookup approach | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
 |---|---|---|
 | current [#1772] | full scan of the heap array on every dequeue | ≈33 µs / ≈63 µs |
-| **Option A — per-user FIFO chain** (recommended) | O(1) check of the user's list head; a linear scan only when the guard fires (29–31% of the depth on average, worst case 100%) | 0.31–0.34 µs idle (307–342 ns) / 4.4–5.5 µs |
-| Option B — heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | ≈20% faster than Option A on the hot path |
+| **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31–0.34 µs / 4.4–5.5 µs |
+| Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | ≈20% faster than Option A on the hot path |
+
+*Costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
 
 **Option A** touches one file and one structure rule:
 
-- `Request.userElem *list.Element` — the request's node in its user's list
+- `Request.userElem *list.Element`: the request's node in its user's list
   (+8 bytes per queued request);
-- `RequestPriorityQueue.userQueues map[string]*list.List` — one FIFO list
+- `RequestPriorityQueue.userQueues map[string]*list.List`: one FIFO list
   per user with queued requests;
-- `Push()` links, `Pop()` unlinks — the two functions through which
-  all heap membership flows (`heap.Init` only reorders,
+- `Push()` links, `Pop()` unlinks: every change to the heap's contents
+  goes through these two functions (`heap.Init` only reorders,
   `heap.Remove` calls back into `Pop()`), so list membership mirrors
   heap membership by construction; `Close()` drops the map;
 - the guard compares the candidate with the head of its user's list and swaps
@@ -223,12 +223,12 @@ it; we implemented and measured all three, and recommend Option A.
 
 **Option B** adds `Request.heapIndex int` (+8 bytes more) maintained in
 `Swap` / `Push` / `Pop`, so the replacement is a direct
-`heap.Remove` — at the cost of a new invariant to maintain and test across
+`heap.Remove`; the cost is a new invariant to maintain and test across
 every heap mutation.
 
 **Recommendation: Option A.** It has the smallest footprint, adds no invariant
 on the heap itself, and moves the linear scan from "every dequeue" to "only
-when the guard fires". Option B is the right choice if a strict bound on the
+when the guard triggers". Option B is the right choice if a strict bound on the
 replacement path is preferred; both variants pass the same tests and are ready
 to be pushed to [#1772] as the branch for this proposal.
 
@@ -241,10 +241,10 @@ to be pushed to [#1772] as the branch for this proposal.
   positions are untouched (Figure 2).
 - **session-boost**: unaffected. Boost has its own ordering rule and does not
   use the fairness comparator; the guard is skipped there.
-- **Boundary of the bookkeeping**: the boost-mode backpressure drain bypasses
-  the standard dequeue (it filters the array and rebuilds), so the new
-  bookkeeping is not consulted on that path; the only residue is list nodes
-  released when the queue closes. See [Future Work](#future-work).
+- **Bookkeeping on the boost drain path**: the boost-mode backpressure drain
+  bypasses the standard dequeue (it filters the array and rebuilds), so the
+  new bookkeeping is not used on that path; the only leftover is list nodes
+  released when the queue closes. See [Related observations](#related-observations-out-of-scope).
 - **Memory**: +8 bytes per queued request for Option A, +16 for Option B, plus
   one list node per queued request in both. Bounded by queue depth.
 
@@ -252,15 +252,15 @@ to be pushed to [#1772] as the branch for this proposal.
 
 | Risk | Mitigation |
 |---|---|
-| Behavior change in a hot path | The guard is one comparison in the common case; full regression + enumeration battery (1.16M orderings, `-race`) |
-| Slower dequeue in the worst case (Option A's scan on hit) | The scan runs only when the guard fires; Option B removes it entirely if needed |
-| New invariant drift (Option B) | The index is maintained only in `Swap/Push/Pop`; covered by the enumeration battery |
+| Behavior change in a hot path | The guard is one comparison in the common case; full regression + all 1.16M orderings enumerated with `-race` |
+| Slower dequeue in the worst case (Option A's scan on hit) | The scan runs only when the guard triggers; Option B removes it entirely if needed |
+| New invariant to maintain (Option B) | The index is maintained only in `Swap/Push/Pop`; covered by the full ordering check |
 | Session-boost regressions | The guard is skipped in boost mode; boost tests unchanged |
 | Scope creep into a redesign | The structural direction is Future Work, explicitly not part of this change |
 
 ### Design Details
 
-#### Guard sketch (shared by all three variants)
+#### The guard in code (shared by all three variants)
 
 ```go
 // after: req := heap.Pop(pq).(*Request)
@@ -280,20 +280,30 @@ lookup with `earliest.heapIndex`.
 
 #### Test Plan
 
-1. **Red case** — `TestPriorityRefresh_PreservesSameUserFIFO` (added in
-   [#1772]): a user's burst is drained while its tracked usage grows; fails
-   without the guard, passes with it.
-2. **Same-millisecond ties** — same-user requests stamped in one millisecond
+1. **Reproducer**: `TestPriorityRefresh_PreservesSameUserFIFO` (added in
+   [#1772]). A user's burst is drained while its tracked usage grows; the test
+   fails without the guard and passes with it.
+2. **Same-millisecond ties**: same-user requests stamped in one millisecond
    keep their current relative order.
-3. **Cancelled / timed-out earlier request** — the guard does not release a
+3. **Cancelled / timed-out earlier request**: the guard does not release a
    cancelled request; ordering of live requests remains FIFO.
-4. **Multi-user interleavings** — guard fires repeatedly with several users in
-   the queue; cross-user order still determined by the heap.
-5. **session-boost** — unchanged behavior (guard skipped).
-6. **Regression** — existing queue suites; enumeration battery over orderings
-   (1.16M cases) with `-race`: 0 failures.
-7. **Performance** — micro-benchmarks for the three variants at depth 1k and
+4. **Multi-user interleavings**: the guard triggers repeatedly with several
+   users in the queue; cross-user order still determined by the heap.
+5. **session-boost**: unchanged behavior (guard skipped).
+6. **Regression**: existing queue suites; all 1.16M orderings enumerated with
+   `-race`: 0 failures.
+7. **Performance**: micro-benchmarks for the three variants at depth 1k and
    20k, single- and multi-user.
+
+#### Related observations (out of scope)
+
+Two small items we noticed while working on this change; we flag them for the
+maintainers to decide rather than proposing them:
+
+1. the boost-mode backpressure drain bypasses the standard dequeue; should it
+   be routed through the standard path?
+2. `Close()` does not reset the request fields of requests still pending in
+   the queue.
 
 ### Alternatives
 
@@ -308,9 +318,9 @@ lookup with `earliest.heapIndex`.
    (user, arrival) tuple): rejected. The comparator sees two requests at a
    time; "the earliest queued request of this user" is a property of the whole
    queue, and the refresh path re-inserts candidates without consulting user
-   order. Enforcement has to happen at the decision point.
-4. **Structural change** — scheduling users instead of requests: not part of
-   this change; described in [Future Work](#future-work).
+   order. Enforcement has to happen at dequeue time.
+4. **Structural change**: scheduling users instead of requests; not part of
+   this change, described in [Future Work](#future-work).
 
 ### Future Work
 
@@ -322,42 +332,32 @@ between arbitrary pairs. An alternative shape is to schedule **users**:
 
 ```mermaid
 flowchart TB
-    H["user heap — one node per user, key = the user's current priority"] --> UA["user A"]
+    H["user heap: one node per user, key = the user's current priority"] --> UA["user A"]
     H --> UB["user B"]
-    UA --- LA["A1 → A2 → A3 — FIFO by arrival, structural (no comparisons)"]
+    UA --- LA["A1 → A2 → A3: FIFO by arrival, structural (no comparisons)"]
     UB --- LB["B1 → B2"]
     LA --- REL["dequeue = pop the user heap root, release the head of that user's list"]
 ```
 
-*Figure 4: a two-level shape — a heap of users, one FIFO list per user.*
+*Figure 4: a two-level shape; a heap of users, one FIFO list per user.*
 
 In this shape, same-user FIFO is structural, the comparator no longer mixes
-rules, and the yield/re-insert refresh machine — and its rebuild fallback — are
+rules, and the re-insert refresh path (and its rebuild fallback) is
 not needed for ordering (the user key can be resampled when the user is
-popped). This direction is **not implemented and carries no measurements** in
-this proposal; it is shared because it is the shape the root cause points to.
+popped). This direction is **not implemented and has no measurements** in
+this proposal; it is shared because it is where the root cause leads.
 Open questions we would want to settle before proposing it:
 
 - how refresh/freshness semantics migrate to a per-user key resampling model;
 - the absolute memory cost of per-user bookkeeping at scale;
 - how the shared queue shell used by session-boost would interact with it.
 
-#### Queue hygiene observations (out of scope)
-
-Two small items we noticed while working on this area; we raise them for the
-maintainers' preference rather than proposing them here:
-
-1. the boost-mode backpressure drain bypasses the standard dequeue — should it
-   be routed through the standard path?
-2. `Close()` does not reset the request fields of requests still pending in
-   the queue.
-
 ### Open Questions
 
-1. Which lookup variant should ship: Option A (recommended), Option B, or the
+1. Which lookup approach should ship: Option A (recommended), Option B, or the
    current scan?
 2. Is the structural direction worth pursuing, and with what phasing?
-3. Should the two hygiene items be folded into this change or tracked
+3. Should these two items be folded into this change or tracked
    separately?
 
 [#1771]: https://github.com/volcano-sh/kthena/issues/1771
