@@ -106,7 +106,7 @@ The test fails without the guard and passes with it.
 | Reproducer, refresh disabled (baseline) | 0 violations |
 | Reproducer on a cluster: refresh on, 3 runs (runs 1–2 same config; run 3 with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
-| Workload profiles (serial / mixed / all-agent), live runs | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (results vary between runs) |
+| Workload profiles (serial / mixed / all-agent), live runs (three-run aggregate) | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (per-run results vary) |
 | Amplification on a constructed workload: fixed scores / usage drift only / default | 0.04–0.06% → 25.2% → 19.7% |
 | After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
 
@@ -202,8 +202,8 @@ it; we implemented and measured all three, and recommend Option A.
 | Lookup approach | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
 |---|---|---|
 | current `#1772` | full scan of the heap array on every dequeue | ≈33 µs / ≈63 µs |
-| **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31–0.34 µs / 4.4–5.5 µs |
-| Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | ≈20% faster than Option A on the hot path |
+| **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31 µs / 5.4–5.6 µs |
+| Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | 0.32–0.36 µs / 4.4–4.5 µs (≈20% faster than Option A on the deep multi-user shape) |
 
 *Costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
 
