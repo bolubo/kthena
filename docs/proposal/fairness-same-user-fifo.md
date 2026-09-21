@@ -109,6 +109,7 @@ The test fails without the guard and passes with it.
 | Reproducer on a cluster: refresh on, 3 runs (runs 1–2 same config; run 3 with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
 | Workload profiles (serial / mixed / all-agent), live runs | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (results vary between runs) |
+| Amplification on a constructed workload: fixed scores / usage drift only / default | 0.04–0.06% → 25.2% → 19.7% (≈500×) |
 | After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
 
 Notes on reading this table:
@@ -118,6 +119,7 @@ Notes on reading this table:
   measure it by reconstructing arrival order (log time minus waiting time) and
   counting same-user inversions over 1 ms. The full results are in [#1771];
   the reproduction steps, audit script, and raw logs are linked from [#1772].
+- The amplification row is a **constructed** workload used to attribute the effect (score drift while a user has a burst queued); the baseline arm is two re-runs (7/18,595 = 0.038% and 10/18,303 = 0.055%). It is not a production incidence rate and should not be quoted as one.
 - Environment: single router, same machine for before/after measurements;
   numbers are for reference, not a benchmark suite.
 
