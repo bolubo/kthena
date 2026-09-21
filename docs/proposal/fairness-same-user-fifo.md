@@ -106,7 +106,7 @@ The test fails without the guard and passes with it.
 | Check | Result |
 |---|---|
 | Reproducer, refresh disabled (baseline) | 0 violations |
-| Reproducer on a cluster: refresh on, 3 runs (last with rebuild disabled) | 26 / 31 / 50 violations |
+| Reproducer on a cluster: refresh on, 3 runs (runs 1–2 same config; run 3 with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
 | Workload profiles (serial / mixed / all-agent), live runs | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (results vary between runs) |
 | After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
