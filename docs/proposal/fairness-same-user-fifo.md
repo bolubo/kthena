@@ -15,18 +15,16 @@ creation-date: 2026-09-19
 
 ### Summary
 
-The fairness queue documents same-user ordering as part of its contract:
+The fairness scheduling user guide documents same-user ordering as part of the
+queue's contract:
 
 - **Same user**: requests remain FIFO by arrival time.
-  ([fairness-scheduling.md, line 22](../kthena/docs/user-guide/fairness-scheduling.md#L22))
 - If the same user sends several requests in sequence, Kthena preserves FIFO
   order for that user. Fairness applies across users, not by reordering a
   single user's own requests.
-  ([fairness-scheduling.md, line 168](../kthena/docs/user-guide/fairness-scheduling.md#L168))
 
 The same guide recommends enabling dequeue-time priority refresh for rapidly
-changing usage patterns (`FAIRNESS_PRIORITY_REFRESH_RETRIES=1` or `2`,
-[fairness-scheduling.md, line 157](../kthena/docs/user-guide/fairness-scheduling.md#L157)).
+changing usage patterns (`FAIRNESS_PRIORITY_REFRESH_RETRIES=1` or `2`).
 
 With dequeue-time refresh enabled, the queue can release a later request of a
 user before an earlier one. Same-user ordering is currently expressed only
@@ -46,15 +44,15 @@ A structural alternative (scheduling users instead of requests) is described
 in [Future Work](#future-work) for discussion only; it is not part of this
 change.
 
-A draft implementation of this proposal is open as [#1772]; the bug is tracked
-as [#1771].
+A draft implementation of this proposal is open as `#1772`; the bug is tracked
+as `#1771`.
 
 ### Motivation
 
 #### How the queue orders requests today
 
 The fairness queue is a single min-heap of requests. Ordering is decided in one
-comparator with three rules ([fairness_queue.go](../../pkg/kthena-router/datastore/fairness_queue.go)):
+comparator with three rules (`fairness_queue.go`):
 
 1. same user -> compare arrival time (FIFO);
 2. different users -> compare priority (lower value is served earlier);
@@ -96,7 +94,7 @@ flowchart TB
 *Figure 1: the reproducer. A1 arrives first, A2 arrives later; A2 is released
 first. Cross-user positions are unaffected.*
 
-The case is deterministic. [#1772] adds
+The case is deterministic. `#1772` adds
 `TestPriorityRefresh_PreservesSameUserFIFO`, which reproduces the violation
 during a burst (the user's burst is drained while its tracked usage grows).
 The test fails without the guard and passes with it.
@@ -117,8 +115,8 @@ Notes on reading this table:
 - The violation is invisible from the outside: queue order is not exposed by
   any metric or dashboard; users only see waiting time. The runs above
   measure it by reconstructing arrival order (log time minus waiting time) and
-  counting same-user inversions over 1 ms. The full results are in [#1771];
-  the reproduction steps, audit script, and raw logs are linked from [#1772].
+  counting same-user inversions over 1 ms. The full results are in `#1771`;
+  the reproduction steps, audit script, and raw logs are linked from `#1772`.
 - The amplification row is a **constructed** workload used to attribute the effect (score drift while a user has a burst queued); the baseline arm is two re-runs (7/18,595 = 0.038% and 10/18,303 = 0.055%). It is not a production incidence rate and should not be quoted as one.
 - Environment: single router, same machine for before/after measurements;
   numbers are for reference, not a benchmark suite.
@@ -179,9 +177,8 @@ B1 stays 2nd and B2 stays 4th, so cross-user positions are unchanged.*
 #### Position in the dequeue path
 
 The guard runs immediately after the candidate is popped, before the
-cancelled/timed-out skip and before the refresh block
-([fairness_queue.go](../../pkg/kthena-router/datastore/fairness_queue.go),
-`popWhenAvailable()`):
+cancelled/timed-out skip and before the refresh block, inside
+`popWhenAvailable()`:
 
 ```mermaid
 flowchart TB
@@ -204,7 +201,7 @@ it; we implemented and measured all three, and recommend Option A.
 
 | Lookup approach | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
 |---|---|---|
-| current [#1772] | full scan of the heap array on every dequeue | ≈33 µs / ≈63 µs |
+| current `#1772` | full scan of the heap array on every dequeue | ≈33 µs / ≈63 µs |
 | **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31–0.34 µs / 4.4–5.5 µs |
 | Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | ≈20% faster than Option A on the hot path |
 
@@ -232,7 +229,7 @@ every heap mutation.
 on the heap itself, and moves the linear scan from "every dequeue" to "only
 when the guard triggers". Option B is the right choice if a strict bound on the
 replacement path is preferred; both variants pass the same tests and are ready
-to be pushed to [#1772] as the branch for this proposal.
+to be pushed to `#1772` as the branch for this proposal.
 
 #### Notes / Constraints / Caveats
 
@@ -283,7 +280,7 @@ lookup with `earliest.heapIndex`.
 #### Test Plan
 
 1. **Reproducer**: `TestPriorityRefresh_PreservesSameUserFIFO` (added in
-   [#1772]). A user's burst is drained while its tracked usage grows; the test
+   `#1772`). A user's burst is drained while its tracked usage grows; the test
    fails without the guard and passes with it.
 2. **Same-millisecond ties**: same-user requests stamped in one millisecond
    keep their current relative order.
@@ -312,7 +309,7 @@ maintainers to decide rather than proposing them:
 1. **Documentation-only mitigation** (stop recommending refresh, or warn about
    ordering): rejected. Freshness and ordering are independent concerns; the
    documented guarantee should not depend on a tuning knob being off.
-2. **Current [#1772] (guard + full scan)**: correct and simple, but pays
+2. **Current `#1772` (guard + full scan)**: correct and simple, but pays
    O(depth) on every dequeue (≈33 µs at depth 20k). Superseded by Option A/B
    on cost; can stay as a minimal first step if the community prefers shipping
    correctness first.
@@ -361,6 +358,3 @@ Open questions we would want to settle before proposing it:
 2. Is the structural direction worth pursuing, and with what phasing?
 3. Should these two items be folded into this change or tracked
    separately?
-
-[#1771]: https://github.com/volcano-sh/kthena/issues/1771
-[#1772]: https://github.com/volcano-sh/kthena/pull/1772
