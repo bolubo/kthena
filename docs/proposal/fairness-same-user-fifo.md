@@ -235,7 +235,7 @@ can serve as the branch for this proposal depending on the room's preference.
 - **Bookkeeping on the boost drain path**: the boost-mode backpressure drain
   bypasses the standard dequeue (it filters the array and rebuilds), so the
   new bookkeeping is not used on that path; the only leftover is list nodes
-  released when the queue closes. See [Related observations](#related-observations-out-of-scope).
+  released when the queue closes. See [Related observation](#related-observation-out-of-scope).
 - **Memory**: one list node per queued request, plus one extra field per request
   in Option B. Bounded by queue depth.
 
@@ -288,15 +288,13 @@ lookup with `earliest.heapIndex`.
 8. **Performance**: micro-benchmarks for the three variants at depth 20k,
    single- and multi-user.
 
-#### Related observations (out of scope)
+#### Related observation (out of scope)
 
-Two small items we noticed while working on this change; we flag them for the
-maintainers to decide rather than proposing them:
+One small item we noticed while working on this change; we flag it for the
+maintainers to decide rather than proposing it:
 
 1. the boost-mode backpressure drain bypasses the standard dequeue; should it
    be routed through the standard path?
-2. `Close()` does not reset the request fields of requests still pending in
-   the queue.
 
 ### Alternatives
 
@@ -350,5 +348,5 @@ Open questions we would want to settle before proposing it:
 1. Which lookup approach should ship: Option A (recommended), Option B, or the
    current scan?
 2. Is the structural direction worth pursuing, and with what phasing?
-3. Should these two items be folded into this change or tracked
+3. Should this item be folded into this change or tracked
    separately?
