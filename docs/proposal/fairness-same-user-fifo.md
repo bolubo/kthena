@@ -37,8 +37,8 @@ This proposal:
 
 1. documents the violation, its root cause, and the evidence;
 2. proposes the fix: enforce same-user FIFO at dequeue time ("the guard");
-3. presents two ready implementations of the lookup the guard needs, with
-   measured cost.
+3. explores two prototype implementations of the lookup the guard needs, with
+   measured cost; their final shape is still open.
 
 A structural alternative (scheduling users instead of requests) is described
 in [Future Work](#future-work) for discussion only; it is not part of this
@@ -138,7 +138,8 @@ documenting it as a caveat.
 2. Keep cross-user scheduling, refresh semantics, configuration, metrics, and
    APIs unchanged.
 3. Keep the new invariants small and local to the queue.
-4. Provide measured costs for the fix and for the alternative implementations.
+4. Provide measured costs for the fix and for the alternative approaches
+   (prototype-level).
 5. Keep this change separable from any structural redesign of the queue.
 
 #### Non-Goals
@@ -197,7 +198,8 @@ and the refresh evaluation.*
 
 The guard needs to answer one question: *which request is this user's earliest
 still-queued one, and where is it in the heap?* There are three ways to answer
-it; we implemented and measured all three, and recommend Option A.
+it; we prototyped and measured all three, and recommend Option A as the
+  default.
 
 | Lookup approach | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
 |---|---|---|
@@ -205,7 +207,7 @@ it; we implemented and measured all three, and recommend Option A.
 | **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31 µs / 5.4–5.6 µs |
 | Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | 0.32–0.36 µs / 4.4–4.5 µs (≈20% faster than Option A on the deep multi-user shape) |
 
-*Costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
+*Prototype costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
 
 **Option A** touches one file and one structure rule:
 
@@ -228,8 +230,8 @@ every heap mutation.
 **Recommendation: Option A.** It has the smallest footprint, adds no invariant
 on the heap itself, and moves the linear scan from "every dequeue" to "only
 when the guard triggers". Option B is the right choice if a strict bound on the
-replacement path is preferred; both variants pass the same tests and are ready
-to be pushed to `#1772` as the branch for this proposal.
+replacement path is preferred; both prototypes pass the same tests, and either
+can serve as the branch for this proposal depending on the room's preference.
 
 #### Notes / Constraints / Caveats
 
