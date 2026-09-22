@@ -285,8 +285,8 @@ lookup with `earliest.heapIndex`.
 7. **Queue-shape sweep**: the same reproducer suite in four queue shapes: depth
    512 in normal and reverse order, and depth 20k in reverse order, single-user
    and three users round-robin; 0 same-user FIFO violations in every shape.
-8. **Performance**: micro-benchmarks for the three variants at depth 1k and
-   20k, single- and multi-user.
+8. **Performance**: micro-benchmarks for the three variants at depth 20k,
+   single- and multi-user.
 
 #### Related observations (out of scope)
 
