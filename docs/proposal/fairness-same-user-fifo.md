@@ -106,7 +106,7 @@ The test fails without the guard and passes with it.
 | Reproducer, refresh disabled (baseline) | 0 violations |
 | Reproducer on a cluster: refresh on, 3 runs (runs 1–2 same config; run 3 with rebuild disabled) | 26 / 31 / 50 violations |
 | Largest observed inversion | 530–550 ms |
-| Workload profiles (serial / mixed / all-agent), live runs (three-run aggregate) | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (per-run results vary) |
+| Workload profiles (serial / mixed / all-agent), replayed / simulated runs (three-run aggregate) | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (per-run results vary) |
 | Amplification on a constructed workload: fixed scores / usage drift only / default | 0.04–0.06% → 25.2% → 19.7% |
 | After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
 
@@ -117,7 +117,7 @@ Notes on reading this table:
   measure it by reconstructing arrival order (log time minus waiting time) and
   counting same-user inversions over 1 ms. The full results are in `#1771`;
   the reproduction steps, audit script, and raw logs are linked from `#1772`.
-- The amplification row is a **constructed** workload used to attribute the effect (score drift while a user has a burst queued); the baseline arm is two re-runs (7/18,595 = 0.038% and 10/18,303 = 0.055%). It is not a production incidence rate and should not be quoted as one.
+- The amplification row is a **constructed** workload used to attribute the effect (score drift while a user has a burst queued); the baseline arm is two re-runs, both in the 0.04–0.06% band. It is not a production incidence rate and should not be quoted as one.
 - Environment: single router, same machine for before/after measurements;
   numbers are for reference, not a benchmark suite.
 
@@ -204,28 +204,18 @@ it; we prototyped and measured all three, and recommend Option A as the
 | Lookup approach | How the earlier request is located | Dequeue cost, 20k-deep queue (single-user / multi-user) |
 |---|---|---|
 | current `#1772` | full scan of the heap array on every dequeue | ≈33 µs / ≈63 µs |
-| **Option A: per-user FIFO list** (recommended) | O(1) check of the user's list head; a linear scan only when the guard triggers (29–31% of the queue on average, 100% worst case) | 0.31 µs / 5.4–5.6 µs |
-| Option B: heap index | O(log n): `heap.Remove(pq, earliest.heapIndex)` | 0.32–0.36 µs / 4.4–4.5 µs (≈20% faster than Option A on the deep multi-user shape) |
+| **Option A: per-user FIFO list** (recommended) | one check of the user's list head in the common case; a scan only when the guard actually triggers | 0.31 µs / 5.4–5.6 µs |
+| Option B: heap index | a direct lookup of the earlier request's stored position | 0.32–0.36 µs / 4.4–4.5 µs (≈20% faster than Option A on the deep multi-user shape) |
 
 *Prototype costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
 
-**Option A** touches one file and one structure rule:
+**Option A** keeps one FIFO list per user with queued requests, mirroring
+the heap's membership; the common case is one check of the user's list head,
+and a scan happens only when the guard actually triggers.
 
-- `Request.userElem *list.Element`: the request's node in its user's list
-  (+8 bytes per queued request);
-- `RequestPriorityQueue.userQueues map[string]*list.List`: one FIFO list
-  per user with queued requests;
-- `Push()` links, `Pop()` unlinks: every change to the heap's contents
-  goes through these two functions (`heap.Init` only reorders,
-  `heap.Remove` calls back into `Pop()`), so list membership mirrors
-  heap membership by construction; `Close()` drops the map;
-- the guard compares the candidate with the head of its user's list and swaps
-  if the head is strictly earlier.
-
-**Option B** adds `Request.heapIndex int` (+8 bytes more) maintained in
-`Swap` / `Push` / `Pop`, so the replacement is a direct
-`heap.Remove`; the cost is a new invariant to maintain and test across
-every heap mutation.
+**Option B** keeps each request's position in the heap array, so the earlier
+request is reached directly instead of by scanning; the cost is a new
+invariant to maintain and test across every heap mutation.
 
 **Recommendation: Option A.** It has the smallest footprint, adds no invariant
 on the heap itself, and moves the linear scan from "every dequeue" to "only
@@ -246,16 +236,15 @@ can serve as the branch for this proposal depending on the room's preference.
   bypasses the standard dequeue (it filters the array and rebuilds), so the
   new bookkeeping is not used on that path; the only leftover is list nodes
   released when the queue closes. See [Related observations](#related-observations-out-of-scope).
-- **Memory**: +8 bytes per queued request for Option A, +16 for Option B, plus
-  one list node per queued request in both. Bounded by queue depth.
+- **Memory**: one list node per queued request, plus one extra field per request
+  in Option B. Bounded by queue depth.
 
 #### Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
 | Behavior change in a hot path | The guard is one comparison in the common case; full regression + all 1.16M orderings enumerated with `-race` |
-| Slower dequeue in the worst case (Option A's scan on hit) | The scan runs only when the guard triggers; Option B removes it entirely if needed |
-| New invariant to maintain (Option B) | The index is maintained only in `Swap/Push/Pop`; covered by the full ordering check |
+| Option A's scan on hit, and Option B's new invariant | The scan runs only when the guard triggers, and the index is maintained only in `Swap/Push/Pop`; both are covered by the full ordering check |
 | Session-boost regressions | The guard is skipped in boost mode; boost tests unchanged |
 | Scope creep into a redesign | The structural direction is Future Work, explicitly not part of this change |
 
