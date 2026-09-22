@@ -35,7 +35,7 @@ still queued.
 
 This proposal:
 
-1. documents the violation, its root cause, and the evidence;
+1. documents the violation and its root cause;
 2. proposes the fix: enforce same-user FIFO at dequeue time ("the guard");
 3. explores two prototype implementations of the lookup the guard needs, with
    measured cost; their final shape is still open.
@@ -98,27 +98,6 @@ The case is deterministic. `#1772` adds
 `TestPriorityRefresh_PreservesSameUserFIFO`, which reproduces the violation
 during a burst (the user's burst is drained while its tracked usage grows).
 The test fails without the guard and passes with it.
-
-#### Evidence
-
-| Check | Result |
-|---|---|
-| Reproducer, refresh disabled (baseline) | 0 violations |
-| Reproducer on a cluster: refresh on, 3 runs (runs 1–2 same config; run 3 with rebuild disabled) | 26 / 31 / 50 violations |
-| Largest observed inversion | 530–550 ms |
-| Workload profiles (serial / mixed / all-agent), replayed / simulated runs (three-run aggregate) | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (per-run results vary) |
-| Amplification on a constructed workload: fixed scores / usage drift only / default | 0.04–0.06% → 25.2% → 19.7% |
-
-Notes on reading this table:
-
-- The violation is invisible from the outside: queue order is not exposed by
-  any metric or dashboard; users only see waiting time. The runs above
-  measure it by reconstructing arrival order (log time minus waiting time) and
-  counting same-user inversions over 1 ms. The full results are in `#1771`;
-  the reproduction steps, audit script, and raw logs are linked from `#1772`.
-- The amplification row is a **constructed** workload used to attribute the effect (score drift while a user has a burst queued); the baseline arm is two re-runs, both in the 0.04–0.06% band. It is not a production incidence rate and should not be quoted as one.
-- Environment: single router, same machine for before/after measurements;
-  numbers are for reference, not a benchmark suite.
 
 #### Why this matters
 
@@ -208,11 +187,11 @@ it; we prototyped and measured all three, and recommend Option A as the
 
 *Prototype costs were measured with synthetic micro-benchmarks on one machine (queue depth 20k; single- and multi-user shapes); all variants were built from the same base code.*
 
-**Option A** keeps one FIFO list per user with queued requests, mirroring
+**Option A** would keep one FIFO list per user with queued requests, mirroring
 the heap's membership; the common case is one check of the user's list head,
 and a scan happens only when the guard actually triggers.
 
-**Option B** keeps each request's position in the heap array, so the earlier
+**Option B** would keep each request's position in the heap array, so the earlier
 request is reached directly instead of by scanning; the cost is a new
 invariant to maintain and test across every heap mutation.
 
@@ -263,25 +242,9 @@ if !pq.sessionBoost {
 }
 ```
 
-Option A replaces `earliestQueuedBeforeLocked` with a lookup of the user's
-list head plus a scan for the head's heap index; Option B replaces the index
+Option A would replace `earliestQueuedBeforeLocked` with a lookup of the user's
+list head plus a scan for the head's heap index; Option B would replace the index
 lookup with `earliest.heapIndex`.
-
-#### Test Plan
-
-1. **Reproducer**: `TestPriorityRefresh_PreservesSameUserFIFO` (added in
-   `#1772`). A user's burst is drained while its tracked usage grows; the test
-   fails without the guard and passes with it.
-2. **Same-millisecond ties**: same-user requests stamped in one millisecond
-   keep their current relative order.
-3. **Cancelled / timed-out earlier request**: the guard does not release a
-   cancelled request; ordering of live requests remains FIFO.
-4. **Multi-user interleavings**: the guard triggers repeatedly with several
-   users in the queue; cross-user order still determined by the heap.
-5. **session-boost**: unchanged behavior (guard skipped).
-6. **Regression**: existing queue test suites.
-7. **Performance**: micro-benchmarks for the three variants at depth 20k,
-   single- and multi-user.
 
 #### Related observation (out of scope)
 
