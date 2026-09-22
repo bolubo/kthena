@@ -108,7 +108,6 @@ The test fails without the guard and passes with it.
 | Largest observed inversion | 530–550 ms |
 | Workload profiles (serial / mixed / all-agent), replayed / simulated runs (three-run aggregate) | 0 of 2,160; <= 0.2%; <= 2.3% of dequeues violated (per-run results vary) |
 | Amplification on a constructed workload: fixed scores / usage drift only / default | 0.04–0.06% → 25.2% → 19.7% |
-| After the fix: the same cluster runs (3 reruns) + all 1.16M orderings enumerated with `-race` | 0 violations; 0 failures |
 
 Notes on reading this table:
 
@@ -220,8 +219,8 @@ invariant to maintain and test across every heap mutation.
 **Recommendation: Option A.** It has the smallest footprint, adds no invariant
 on the heap itself, and moves the linear scan from "every dequeue" to "only
 when the guard triggers". Option B is the right choice if a strict bound on the
-replacement path is preferred; both prototypes pass the same tests, and either
-can serve as the branch for this proposal depending on the room's preference.
+replacement path is preferred; either can serve as the branch for this
+proposal depending on the room's preference.
 
 #### Notes / Constraints / Caveats
 
@@ -243,8 +242,8 @@ can serve as the branch for this proposal depending on the room's preference.
 
 | Risk | Mitigation |
 |---|---|
-| Behavior change in a hot path | The guard is one comparison in the common case; full regression + all 1.16M orderings enumerated with `-race` |
-| Option A's scan on hit, and Option B's new invariant | The scan runs only when the guard triggers, and the index is maintained only in `Swap/Push/Pop`; both are covered by the full ordering check |
+| Behavior change in a hot path | The guard is one comparison in the common case; the existing queue suites cover the queue's behavior |
+| Option A's scan on hit, and Option B's new invariant | The scan runs only when the guard triggers, and the index is maintained only in `Swap/Push/Pop` |
 | Session-boost regressions | The guard is skipped in boost mode; boost tests unchanged |
 | Scope creep into a redesign | The structural direction is Future Work, explicitly not part of this change |
 
@@ -280,12 +279,8 @@ lookup with `earliest.heapIndex`.
 4. **Multi-user interleavings**: the guard triggers repeatedly with several
    users in the queue; cross-user order still determined by the heap.
 5. **session-boost**: unchanged behavior (guard skipped).
-6. **Regression**: existing queue suites; all 1.16M orderings enumerated with
-   `-race`: 0 failures.
-7. **Queue-shape sweep**: the same reproducer suite in four queue shapes: depth
-   512 in normal and reverse order, and depth 20k in reverse order, single-user
-   and three users round-robin; 0 same-user FIFO violations in every shape.
-8. **Performance**: micro-benchmarks for the three variants at depth 20k,
+6. **Regression**: existing queue test suites.
+7. **Performance**: micro-benchmarks for the three variants at depth 20k,
    single- and multi-user.
 
 #### Related observation (out of scope)
